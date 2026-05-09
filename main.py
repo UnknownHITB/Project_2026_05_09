@@ -7,6 +7,13 @@ Choose your input mode:
 """
 
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+import torch
+# Initialize CUDA context early to prevent conflicts with other libraries
+if torch.cuda.is_available():
+    torch.cuda.init()
+
 from app.providers.ollama_provider import OllamaProvider
 
 
@@ -30,11 +37,17 @@ def run_voice_chat(provider: OllamaProvider):
       listener captures speech → saves .wav → stt transcribes → AI responds
     """
     from app.core.listener import listen_for_speech
-    from app.core.stt import transcribe_wav
-    from app.core.tts import speak
+    from app.core.stt import get_model, transcribe_wav
+    from app.core.tts import KokoroTTS, speak
 
     print("\n--- Voice Chat Mode ---")
     print("Speak naturally. Say 'exit' or 'quit' to stop. Press Ctrl+C to cancel.\n")
+
+    # Pre-initialize models for faster first response
+    print("[System] Warming up AI models (STT & TTS)...")
+    get_model()   # Pre-load Whisper
+    KokoroTTS()   # Pre-load Kokoro
+    print("[System] Models ready!\n")
 
     messages = []
 

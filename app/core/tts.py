@@ -1,6 +1,3 @@
-import sounddevice as sd
-from kokoro import KPipeline
-import torch
 import logging
 import queue
 import threading
@@ -22,12 +19,31 @@ class KokoroTTS:
         if self._initialized:
             return
         
+        # Late imports to prevent conflicts at module level
+        from kokoro import KPipeline
+        import torch
+
+        # Clear cache to free up VRAM from Ollama/Whisper usage
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # Detect device
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logger.info(f"Initializing Kokoro TTS Pipeline on {device.upper()}...")
         
         try:
-            self.pipeline = KPipeline(lang_code=lang_code, device=device)
+            import sounddevice as sd
+            self.sd = sd
+            try:
+                self.pipeline = KPipeline(lang_code=lang_code, device=device)
+            except Exception as e:
+                if device == 'cuda':
+                    logger.warning(f"CUDA initialization failed, falling back to CPU: {e}")
+                    device = 'cpu'
+                    self.pipeline = KPipeline(lang_code=lang_code, device=device)
+                else:
+                    raise e
+            
             self.voice = voice
             self.sample_rate = 24000
             self._initialized = True
@@ -77,8 +93,8 @@ class KokoroTTS:
                     break
                 
                 # Play the segment
-                sd.play(audio, self.sample_rate)
-                sd.wait() # Wait for this segment to finish
+                self.sd.play(audio, self.sample_rate)
+                self.sd.wait() # Wait for this segment to finish
                 audio_queue.task_done()
         except Exception as e:
             logger.error(f"Error during streaming playback: {e}")

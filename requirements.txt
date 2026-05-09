@@ -1,3 +1,4 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
 pyaudio
 SpeechRecognition
 requests
@@ -11,4 +12,7 @@ soundfile
 sounddevice
 numpy
 torch
+torchvision
+torchaudio
 ddgs
+faster-whisper

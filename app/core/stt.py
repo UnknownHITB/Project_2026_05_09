@@ -7,13 +7,31 @@ transcribe_wav(wav_path: str) -> str
     Transcribes the given .wav file and returns the text.
     On failure, returns a string starting with 'Error:'.
 """
+import os
 
-import speech_recognition as sr
+# Global model instance for lazy initialization
+_model = None
 
+def get_model():
+    """
+    Lazy load the Whisper model.
+    Initializes on CUDA by default for maximum performance.
+    """
+    global _model
+    if _model is None:
+        from faster_whisper import WhisperModel
+        import torch
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # float16 is best for CUDA, int8 for CPU
+        compute_type = "float16" if device == "cuda" else "int8"
+        
+        _model = WhisperModel("base", device=device, compute_type=compute_type)
+    return _model
 
 def transcribe_wav(wav_path: str) -> str:
     """
-    Convert a .wav file to text using Google Web Speech API.
+    Convert a .wav file to text using faster-whisper.
 
     Args:
         wav_path: Absolute or relative path to the .wav file.
@@ -21,20 +39,17 @@ def transcribe_wav(wav_path: str) -> str:
     Returns:
         Transcribed text, or an error string beginning with 'Error:'.
     """
-    recognizer = sr.Recognizer()
+    if not os.path.exists(wav_path):
+        return f"Error: File not found: {wav_path}"
 
     try:
-        with sr.AudioFile(wav_path) as source:
-            audio = recognizer.record(source)
+        model = get_model()
+        segments, info = model.transcribe(wav_path, beam_size=5)
+        
+        # Combine segments into a single string
+        text = " ".join([segment.text for segment in segments]).strip()
+        return text
 
-        return recognizer.recognize_google(audio)
-
-    except FileNotFoundError:
-        return f"Error: File not found: {wav_path}"
-    except sr.UnknownValueError:
-        return "Error: Could not understand the audio."
-    except sr.RequestError as e:
-        return f"Error: Speech Recognition service unavailable; {e}"
     except Exception as e:
         return f"Error: {e}"
 
