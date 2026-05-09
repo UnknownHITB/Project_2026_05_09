@@ -1,16 +1,16 @@
 import requests
 import json
 import os
+import sys
+import base64
+from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
 
-import sys
-from pathlib import Path
-
 # Add project root to sys.path so absolute imports work regardless of how script is called
-root_dir = str(Path(__file__).parent.parent)
+root_dir = str(Path(__file__).parent.parent.parent)
 if root_dir not in sys.path:
     sys.path.insert(0, root_dir)
 
@@ -60,11 +60,40 @@ class OllamaProvider:
                     print(f"[Tools] Executing: {func_name}({func_args})")
                     result = registry.call_tool(func_name, func_args)
                     
-                    # Append tool result to messages
+                    # Check if the result is an image path (from vision tools)
+                    if isinstance(result, str) and result.startswith("IMAGE_PATH:"):
+                        img_path = result.replace("IMAGE_PATH:", "")
+                        if os.path.exists(img_path):
+                            try:
+                                with open(img_path, "rb") as img_file:
+                                    img_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+                                
+                                # Ollama expects images on user/assistant messages, not tool messages.
+                                # Append a tool result first, then a user message with the image.
+                                messages.append({
+                                    "role": "tool",
+                                    "content": f"Image captured and attached from {func_name}.",
+                                    "name": func_name
+                                })
+                                messages.append({
+                                    "role": "user",
+                                    "content": "Here is the captured image. Describe what you see.",
+                                    "images": [img_base64]
+                                })
+                                print(f"[Vision] Attached image to message: {img_path}")
+                                continue  # skip the normal tool_message append below
+
+                            except Exception as e:
+                                print(f"[Vision] Error encoding image: {e}")
+                                result = f"Error encoding image: {e}"
+                        else:
+                            result = f"Image file not found at {img_path}"
+
+                    # Append tool result to messages (non-image tools, or fallback)
                     messages.append({
                         "role": "tool",
                         "content": result,
-                        "name": func_name # Optional but helpful
+                        "name": func_name
                     })
                 
                 # After appending tool results, loop back to let the model generate the final response

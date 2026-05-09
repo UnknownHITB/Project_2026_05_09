@@ -7,7 +7,7 @@ Choose your input mode:
 """
 
 import os
-from app.ollama_provider import OllamaProvider
+from app.providers.ollama_provider import OllamaProvider
 
 
 def pick_mode() -> str:
@@ -29,8 +29,8 @@ def run_voice_chat(provider: OllamaProvider):
     Continuous voice loop:
       listener captures speech → saves .wav → stt transcribes → AI responds
     """
-    from app.listener import listen_for_speech
-    from app.stt import transcribe_wav
+    from app.core.listener import listen_for_speech
+    from app.core.stt import transcribe_wav
 
     print("\n--- Voice Chat Mode ---")
     print("Speak naturally. Say 'exit' or 'quit' to stop. Press Ctrl+C to cancel.\n")
@@ -83,7 +83,7 @@ def main():
     if mode == "voice":
         run_voice_chat(provider)
     else:
-        from app.text import run_text_chat
+        from app.core.text import run_text_chat
         run_text_chat(provider)
 
 

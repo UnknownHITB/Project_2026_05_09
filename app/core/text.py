@@ -1,4 +1,4 @@
-from .ollama_provider import OllamaProvider
+from app.providers.ollama_provider import OllamaProvider
 
 
 def run_text_chat(provider: OllamaProvider = None):

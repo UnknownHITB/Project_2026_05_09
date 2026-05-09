@@ -2,3 +2,7 @@ pyaudio
 SpeechRecognition
 requests
 python-dotenv
+opencv-python
+pyautogui
+Pillow
+pyscreeze
