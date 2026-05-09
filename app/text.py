@@ -33,8 +33,6 @@ def run_text_chat(provider: OllamaProvider = None):
         response = provider.chat(messages)
         print(response)
 
-        messages.append({"role": "assistant", "content": response})
-
 
 # ── Standalone usage ──────────────────────────────────────────────────────────
 if __name__ == "__main__":

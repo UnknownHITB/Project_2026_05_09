@@ -70,7 +70,6 @@ def run_voice_chat(provider: OllamaProvider):
             print("AI: ", end="", flush=True)
             response = provider.chat(messages)
             print(response, "\n")
-            messages.append({"role": "assistant", "content": response})
 
         except KeyboardInterrupt:
             print("\nInterrupted. Goodbye!")
