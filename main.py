@@ -31,6 +31,7 @@ def run_voice_chat(provider: OllamaProvider):
     """
     from app.core.listener import listen_for_speech
     from app.core.stt import transcribe_wav
+    from app.core.tts import speak
 
     print("\n--- Voice Chat Mode ---")
     print("Speak naturally. Say 'exit' or 'quit' to stop. Press Ctrl+C to cancel.\n")
@@ -70,6 +71,9 @@ def run_voice_chat(provider: OllamaProvider):
             print("AI: ", end="", flush=True)
             response = provider.chat(messages)
             print(response, "\n")
+            
+            # 4. Speak the response
+            speak(response)
 
         except KeyboardInterrupt:
             print("\nInterrupted. Goodbye!")

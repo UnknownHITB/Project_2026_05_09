@@ -6,3 +6,8 @@ opencv-python
 pyautogui
 Pillow
 pyscreeze
+kokoro
+soundfile
+sounddevice
+numpy
+torch
