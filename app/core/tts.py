@@ -64,14 +64,25 @@ class KokoroTTS:
         if not text or not text.strip():
             return
 
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         logger.info(f"Speaking (streaming): {text[:50]}...")
         
         audio_queue = queue.Queue()
         
+        try:
+            # Create the generator in the main thread to avoid potential 
+            # threading issues with Hugging Face Hub downloads/requests.
+            generator = self.pipeline(text, voice=self.voice, speed=1.0)
+        except Exception as e:
+            logger.error(f"Failed to create Kokoro generator: {e}")
+            return
+        
         def producer():
             """Generates audio segments and puts them in the queue."""
             try:
-                generator = self.pipeline(text, voice=self.voice, speed=1.0)
                 for gs, ps, audio in generator:
                     if audio is not None:
                         audio_queue.put(audio)
@@ -98,6 +109,8 @@ class KokoroTTS:
                 audio_queue.task_done()
         except Exception as e:
             logger.error(f"Error during streaming playback: {e}")
+        
+        logger.info("Finished speaking.")
 
 def speak(text):
     """

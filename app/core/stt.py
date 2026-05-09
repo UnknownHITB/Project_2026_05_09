@@ -22,11 +22,19 @@ def get_model():
         from faster_whisper import WhisperModel
         import torch
         
+        # Check for CUDA availability
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # compute_type options: float16, int8_float16, int8
         # float16 is best for CUDA, int8 for CPU
         compute_type = "float16" if device == "cuda" else "int8"
         
-        _model = WhisperModel("base", device=device, compute_type=compute_type)
+        # distil-medium.en is much faster than standard models with high accuracy.
+        # Use "small" if you need multi-language support.
+        model_size = "distil-medium.en" 
+        
+        print(f"Loading STT model: {model_size} ({device}/{compute_type})...")
+        _model = WhisperModel(model_size, device=device, compute_type=compute_type)
     return _model
 
 def transcribe_wav(wav_path: str) -> str:
@@ -44,7 +52,18 @@ def transcribe_wav(wav_path: str) -> str:
 
     try:
         model = get_model()
-        segments, info = model.transcribe(wav_path, beam_size=5)
+        
+        # Optimization:
+        # - language="en": skips language detection
+        # - vad_filter=True: removes silence before transcription (faster & cleaner)
+        # - beam_size=1: greedy decoding (fastest). Use 5 for slightly better accuracy.
+        segments, info = model.transcribe(
+            wav_path, 
+            beam_size=1, 
+            language="en", 
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500)
+        )
         
         # Combine segments into a single string
         text = " ".join([segment.text for segment in segments]).strip()

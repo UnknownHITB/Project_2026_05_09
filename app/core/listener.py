@@ -25,7 +25,7 @@ RATE        = 16000         # Hz  (good for speech recognition)
 
 # ── VAD settings ───────────────────────────────────────────────────────────────
 DEFAULT_THRESHOLD      = 500   # RMS level that counts as "speech"
-SILENCE_AFTER_SPEECH   = 1.5   # seconds of silence before we stop recording
+SILENCE_AFTER_SPEECH   = 0.8   # seconds of silence before we stop recording (faster response)
 MIN_SPEECH_SECONDS     = 0.3   # ignore blips shorter than this
 
 
@@ -37,6 +37,15 @@ def _rms(data: bytes) -> float:
     shorts = struct.unpack(f"{count}h", data)
     return math.sqrt(sum(s * s for s in shorts) / count)
 
+
+# Global PyAudio instance to avoid overhead of re-initializing hardware
+_p = None
+
+def get_pyaudio():
+    global _p
+    if _p is None:
+        _p = pyaudio.PyAudio()
+    return _p
 
 def listen_for_speech(output_path: str = None, threshold: int = DEFAULT_THRESHOLD) -> str | None:
     """
@@ -54,10 +63,10 @@ def listen_for_speech(output_path: str = None, threshold: int = DEFAULT_THRESHOL
         fd, output_path = tempfile.mkstemp(suffix=".wav", prefix="speech_")
         os.close(fd)
 
-    p = pyaudio.PyAudio()
-    sample_width = p.get_sample_size(FORMAT)
+    pa = get_pyaudio()
+    sample_width = pa.get_sample_size(FORMAT)
 
-    stream = p.open(
+    stream = pa.open(
         format=FORMAT,
         channels=CHANNELS,
         rate=RATE,
@@ -104,7 +113,7 @@ def listen_for_speech(output_path: str = None, threshold: int = DEFAULT_THRESHOL
     finally:
         stream.stop_stream()
         stream.close()
-        p.terminate()
+        # We don't terminate _p here to keep it alive for the next call
 
     # Discard too-short captures (likely noise)
     if speech_chunks < min_speech:
