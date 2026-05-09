@@ -15,7 +15,17 @@ def open_program(program_name: str) -> str:
     # Normalize name (remove extension for which() check if needed)
     base_name = program_name.replace(".exe", "")
     
-    # Strategy 1: os.startfile (The "Windows Magic" way)
+    # Strategy 1: AppOpener (Best for installed apps like Spotify, Chrome, etc.)
+    if open_app:
+        try:
+            # We use match_closest=True to be flexible with names
+            open_app(program_name, match_closest=True)
+            # AppOpener doesn't return a status, but if it doesn't raise, we assume it worked
+            return f"Success: Opened '{program_name}' using AppOpener."
+        except Exception:
+            pass
+
+    # Strategy 2: os.startfile (The "Windows Magic" way)
     try:
         os.startfile(program_name)
         return f"Success: Opened '{program_name}' using os.startfile."
@@ -26,17 +36,21 @@ def open_program(program_name: str) -> str:
         except Exception:
             pass
 
-    # Strategy 2: AppOpener (Best for installed apps like Spotify, Chrome, etc.)
-    if open_app:
-        try:
-            # We use match_closest=True to be flexible with names
-            open_app(program_name, match_closest=True)
-            # AppOpener doesn't return a status, but if it doesn't raise, we assume it worked
-            return f"Success: Opened '{program_name}' using AppOpener."
-        except Exception:
-            pass
+    
+    # Strategy 3: URI Scheme (e.g., spotify:, discord:, etc.)
+    try:
+        # Check if it looks like a common app that might have a URI scheme
+        # We try both the raw name and name:
+        for uri in [f"{program_name}:", f"{base_name}:"]:
+            try:
+                os.startfile(uri)
+                return f"Success: Opened '{program_name}' using URI scheme '{uri}'."
+            except Exception:
+                continue
+    except Exception:
+        pass
 
-    # Strategy 3: shutil.which (Find in PATH)
+    # Strategy 4: shutil.which (Find in PATH)
     path = shutil.which(program_name) or shutil.which(f"{base_name}.exe")
     if path:
         try:
@@ -45,7 +59,7 @@ def open_program(program_name: str) -> str:
         except Exception:
             pass
 
-    # Strategy 4: Windows 'start' command
+    # Strategy 5: Windows 'start' command
     try:
         # Use subprocess.run with check=True to see if 'start' actually found something
         # Note: 'start' returns immediately, so we just check if the command itself was valid
@@ -54,7 +68,7 @@ def open_program(program_name: str) -> str:
     except Exception:
         pass
 
-    # Strategy 5: Shell execution (Last resort)
+    # Strategy 6: Shell execution (Last resort)
     # Only try this if the name looks like an executable
     if shutil.which(program_name):
         try:

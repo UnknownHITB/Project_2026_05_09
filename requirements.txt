@@ -16,3 +16,4 @@ torchvision
 torchaudio
 ddgs
 faster-whisper
+AppOpener
