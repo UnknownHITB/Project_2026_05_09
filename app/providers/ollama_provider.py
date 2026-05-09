@@ -22,6 +22,28 @@ class OllamaProvider:
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
 
+    def _get_memory_context(self):
+        """Retrieves and formats current memory state for injection into the prompt."""
+        try:
+            from app.core.memory import memory
+            
+            # Semantic: User Facts
+            facts = memory.get_facts(entity='user')
+            semantic_text = "KNOWN FACTS ABOUT USER:\n" + ("\n".join([f"- {a}: {v}" for a, v in facts]) if facts else "- None yet.")
+            
+            # Episodic: Recent summaries
+            episodes = memory.get_recent_episodes(limit=3)
+            episodic_text = "PAST CONVERSATION SUMMARIES:\n" + ("\n".join([f"- {s}" for s, _ in episodes]) if episodes else "- No past history.")
+            
+            # Procedural: System Rules
+            rules = memory.get_all_rules()
+            procedural_text = "CORE SYSTEM RULES:\n" + ("\n".join([f"- {r}" for r in rules]) if rules else "- Be helpful and concise.")
+            
+            return f"{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
+        except Exception as e:
+            print(f"[Memory] Error loading context: {e}")
+            return "Be a helpful assistant."
+
     def chat(self, messages):
         """
         Sends a list of messages to Ollama and returns the response.
@@ -29,6 +51,15 @@ class OllamaProvider:
         """
         url = f"{self.base_url}/api/chat"
         
+        # Inject memory context as a system message if not present
+        memory_ctx = self._get_memory_context()
+        
+        # Check if first message is system, if so update it, otherwise insert
+        if messages and messages[0].get("role") == "system":
+            messages[0]["content"] = memory_ctx
+        else:
+            messages.insert(0, {"role": "system", "content": memory_ctx})
+
         while True:
             payload = {
                 "model": self.model,
