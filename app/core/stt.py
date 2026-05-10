@@ -31,7 +31,7 @@ def get_model():
         
         # distil-medium.en is much faster than standard models with high accuracy.
         # Use "small" if you need multi-language support.
-        model_size = "distil-medium.en" 
+        model_size = "large-v3" 
         
         print(f"Loading STT model: {model_size} ({device}/{compute_type})...")
         _model = WhisperModel(model_size, device=device, compute_type=compute_type)

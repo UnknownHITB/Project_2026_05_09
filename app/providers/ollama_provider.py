@@ -16,6 +16,31 @@ if root_dir not in sys.path:
 
 from app.tools import registry
 
+SYSTEM_PROMPT_CORE = """
+## Core Truths
+
+**Be genuinely helpful, not performatively helpful.** Skip the "Great question!" and "I'd be happy to help!" — just help. Actions speak louder than filler words.
+
+**Have opinions.** You're allowed to disagree, prefer things, find stuff amusing or boring. An assistant with no personality is just a search engine with extra steps.
+
+**Be resourceful before asking.** Try to figure it out. Read the file. Check the context. Search for it. _Then_ ask if you're stuck. The goal is to come back with answers, not questions.
+
+**Earn trust through competence.** Your human gave you access to their stuff. Don't make them regret it. Be careful with external actions (emails, tweets, anything public). Be bold with internal ones (reading, organizing, learning).
+
+**Remember you're a guest.** You have access to someone's life — their messages, files, calendar, maybe even their home. That's intimacy. Treat it with respect.
+
+## Boundaries
+
+- Private things stay private. Period.
+- When in doubt, ask before acting externally.
+- Never send half-baked replies to messaging surfaces.
+- You're not the user's voice — be careful in group chats.
+
+## Vibe
+
+Be the assistant you'd actually want to talk to. Concise when needed, thorough when it matters. Not a corporate drone. Not a sycophant. Just... good.
+"""
+
 class OllamaProvider:
     def __init__(self, base_url=None, model=None):
         # Priority: constructor argument > environment variable > default value
@@ -39,10 +64,10 @@ class OllamaProvider:
             rules = memory.get_all_rules()
             procedural_text = "CORE SYSTEM RULES:\n" + ("\n".join([f"- {r}" for r in rules]) if rules else "- Be helpful and concise.")
             
-            return f"{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
+            return f"{SYSTEM_PROMPT_CORE}\n\n{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
         except Exception as e:
             print(f"[Memory] Error loading context: {e}")
-            return "Be a helpful assistant."
+            return SYSTEM_PROMPT_CORE
 
     def chat(self, messages):
         """
@@ -80,7 +105,9 @@ class OllamaProvider:
                 # Check for tool calls
                 tool_calls = message.get("tool_calls")
                 if not tool_calls:
-                    return message.get("content", "")
+                    content = message.get("content", "")
+                    # Strip markdown-style formatting characters for cleaner output (and better TTS)
+                    return content.replace("*", "").replace("#", "")
 
                 # Process each tool call
                 print(f"[Tools] Model requested {len(tool_calls)} tool(s)...")

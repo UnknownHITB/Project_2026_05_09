@@ -13,6 +13,7 @@ import audioop
 import os
 import tempfile
 import wave
+from collections import deque
 
 import pyaudio
 
@@ -24,8 +25,9 @@ RATE        = 16000         # Hz  (good for speech recognition)
 
 # ── VAD settings ───────────────────────────────────────────────────────────────
 DEFAULT_THRESHOLD      = 500   # RMS level that counts as "speech"
-SILENCE_AFTER_SPEECH   = 0.8   # seconds of silence before we stop recording (faster response)
+SILENCE_AFTER_SPEECH   = 1.5   # seconds of silence before we stop recording (faster response)
 MIN_SPEECH_SECONDS     = 0.3   # ignore blips shorter than this
+PRE_BUFFER_SECONDS     = 0.5   # amount of audio to keep before speech is detected
 
 
 def _rms(data: bytes) -> float:
@@ -86,6 +88,9 @@ def listen_for_speech(output_path: str = None, threshold: int = DEFAULT_THRESHOL
     silence_limit = int(RATE / CHUNK * SILENCE_AFTER_SPEECH)
     # Minimum chunks to count as real speech
     min_speech    = int(RATE / CHUNK * MIN_SPEECH_SECONDS)
+    # Number of chunks to keep in pre-buffer
+    pre_buffer_limit = int(RATE / CHUNK * PRE_BUFFER_SECONDS)
+    pre_buffer = deque(maxlen=pre_buffer_limit)
 
     try:
         while True:
@@ -97,6 +102,10 @@ def listen_for_speech(output_path: str = None, threshold: int = DEFAULT_THRESHOL
                     print("🔴 Recording…")
                     recording    = True
                     silent_chunks = 0
+                    # Prepend the pre-buffer when recording starts
+                    frames.extend(list(pre_buffer))
+                    pre_buffer.clear()
+                
                 speech_chunks += 1
                 frames.append(data)
 
@@ -107,8 +116,10 @@ def listen_for_speech(output_path: str = None, threshold: int = DEFAULT_THRESHOL
                 if silent_chunks >= silence_limit:
                     print("⏹  Speech ended.")
                     break
+            else:
+                # Not recording yet, keep the pre-buffer updated
+                pre_buffer.append(data)
 
-            # If not yet recording we just keep polling — no frames stored
     except KeyboardInterrupt:
         print("\nListener interrupted.")
     finally:
@@ -122,11 +133,25 @@ def listen_for_speech(output_path: str = None, threshold: int = DEFAULT_THRESHOL
         return None
 
     # Save WAV
+    full_audio = b"".join(frames)
+    
+    # --- Quality Improvement: Normalization ---
+    # Boost the volume so the loudest part is at 80% of max (to avoid clipping but ensure clarity)
+    try:
+        max_val = audioop.max(full_audio, 2)
+        if max_val > 0:
+            target_max = 32767 * 0.8
+            factor = target_max / max_val
+            if factor > 1.0: # Only boost if it's too quiet
+                full_audio = audioop.mul(full_audio, 2, factor)
+    except Exception as e:
+        print(f"[Listener] Normalization failed: {e}")
+
     with wave.open(output_path, "wb") as wf:
         wf.setnchannels(CHANNELS)
         wf.setsampwidth(sample_width)
         wf.setframerate(RATE)
-        wf.writeframes(b"".join(frames))
+        wf.writeframes(full_audio)
 
     return output_path
 
