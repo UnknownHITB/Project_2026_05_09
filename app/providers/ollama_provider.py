@@ -46,23 +46,20 @@ class OllamaProvider:
         # Priority: constructor argument > environment variable > default value
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
+        self.session = requests.Session()
 
     def _get_memory_context(self):
         """Retrieves and formats current memory state for injection into the prompt."""
         try:
             from app.core.memory import memory
             
-            # Semantic: User Facts
-            facts = memory.get_facts(entity='user')
-            semantic_text = "KNOWN FACTS ABOUT USER:\n" + ("\n".join([f"- {a}: {v}" for a, v in facts]) if facts else "- None yet.")
+            # Efficiently retrieve all memory in one connection
+            ctx = memory.get_full_context(entity='user', episode_limit=3)
             
-            # Episodic: Recent summaries
-            episodes = memory.get_recent_episodes(limit=3)
-            episodic_text = "PAST CONVERSATION SUMMARIES:\n" + ("\n".join([f"- {s}" for s, _ in episodes]) if episodes else "- No past history.")
-            
-            # Procedural: System Rules
-            rules = memory.get_all_rules()
-            procedural_text = "CORE SYSTEM RULES:\n" + ("\n".join([f"- {r}" for r in rules]) if rules else "- Be helpful and concise.")
+            # Format sections efficiently
+            procedural_text = "CORE SYSTEM RULES:\n" + ("\n".join([f"- {r}" for r in ctx['rules']]) if ctx['rules'] else "- Be helpful and concise.")
+            semantic_text = "KNOWN FACTS ABOUT USER:\n" + ("\n".join([f"- {a}: {v}" for a, v in ctx['facts']]) if ctx['facts'] else "- None yet.")
+            episodic_text = "PAST CONVERSATION SUMMARIES:\n" + ("\n".join([f"- {s}" for s in ctx['episodes']]) if ctx['episodes'] else "- No past history.")
             
             return f"{SYSTEM_PROMPT_CORE}\n\n{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
         except Exception as e:
@@ -94,7 +91,7 @@ class OllamaProvider:
             }
             
             try:
-                response = requests.post(url, json=payload)
+                response = self.session.post(url, json=payload)
                 response.raise_for_status()
                 response_json = response.json()
                 message = response_json.get("message", {})

@@ -9,6 +9,12 @@ class MemoryManager:
     def __init__(self, db_path="memory.sqlite"):
         self.db_path = db_path
         self._init_db()
+        # Cache configuration and initialize session for performance
+        self.base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.embed_model = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+        self.main_model = os.getenv("OLLAMA_MODEL", "llama3")
+        self.session = requests.Session()
+        self.active_embed_model = None  # Caches the first successful model
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -79,19 +85,51 @@ class MemoryManager:
             conn.commit()
         return f"Forgotten fact: {entity}'s {attribute}."
 
+    def get_full_context(self, entity='user', episode_limit=3):
+        """Retrieves all memory types in a single database connection for performance."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # Semantic
+            cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
+            facts = cursor.fetchall()
+
+            # Episodic
+            cursor.execute("SELECT summary FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (episode_limit,))
+            episodes = [row[0] for row in cursor.fetchall()]
+
+            # Procedural
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+            return {
+                "facts": facts,
+                "episodes": episodes,
+                "rules": rules
+            }
+
     # --- Episodic Memory Methods ---
     def _get_embedding(self, text):
         """Generates an embedding for the given text using Ollama."""
         try:
-            # Prioritize nomic-embed-text for high-quality embeddings
-            model = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-            url = f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}/api/embeddings"
-            response = requests.post(url, json={"model": model, "prompt": text})
+            url = f"{self.base_url}/api/embeddings"
             
-            if response.status_code != 200:
-                # Fallback to main model if nomic is missing
-                main_model = os.getenv("OLLAMA_MODEL", "llama3")
-                response = requests.post(url, json={"model": main_model, "prompt": text})
+            # If we already found a working model, use it directly
+            if self.active_embed_model:
+                response = self.session.post(url, json={"model": self.active_embed_model, "prompt": text})
+                response.raise_for_status()
+                return response.json()["embedding"]
+
+            # Otherwise, try the preferred model first
+            response = self.session.post(url, json={"model": self.embed_model, "prompt": text})
+
+            if response.status_code == 200:
+                self.active_embed_model = self.embed_model
+            else:
+                # Fallback to main model if preferred is missing
+                response = self.session.post(url, json={"model": self.main_model, "prompt": text})
+                if response.status_code == 200:
+                    self.active_embed_model = self.main_model
             
             response.raise_for_status()
             return response.json()["embedding"]
@@ -119,6 +157,7 @@ class MemoryManager:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
+        query_norm = np.linalg.norm(query_vec)
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -131,8 +170,8 @@ class MemoryManager:
         scored_results = []
         for summary, vector_blob, timestamp in results:
             stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity
-            similarity = np.dot(query_vec, stored_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(stored_vec))
+            # Cosine similarity optimized by pre-calculating query_norm
+            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
             scored_results.append((summary, timestamp, similarity))
 
         # Sort by similarity
