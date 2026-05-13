@@ -17,3 +17,5 @@ torchaudio
 ddgs
 faster-whisper
 AppOpener
+fastapi
+uvicorn[standard]

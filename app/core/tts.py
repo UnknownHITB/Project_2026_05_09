@@ -112,6 +112,52 @@ class KokoroTTS:
         
         logger.info("Finished speaking.")
 
+    def synthesize_to_wav_bytes(self, text: str) -> bytes:
+        """
+        Render full utterance to a WAV (PCM_16) in memory — no playback.
+        Used by the HTTP API for phone/remote clients.
+        """
+        if not self._initialized or not text or not text.strip():
+            return b""
+
+        import io
+
+        import numpy as np
+        import soundfile as sf
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        chunks = []
+        try:
+            generator = self.pipeline(text, voice=self.voice, speed=1.0)
+            for _gs, _ps, audio in generator:
+                if audio is not None:
+                    chunks.append(np.asarray(audio, dtype=np.float32))
+        except Exception as e:
+            logger.error(f"synthesize_to_wav_bytes failed: {e}")
+            return b""
+
+        if not chunks:
+            return b""
+
+        full = np.concatenate(chunks)
+        buf = io.BytesIO()
+        sf.write(buf, full, self.sample_rate, format="WAV", subtype="PCM_16")
+        return buf.getvalue()
+
+
+_tts_synth_lock = threading.Lock()
+
+
+def synthesize_speech_wav(text: str) -> bytes:
+    """Thread-safe WAV synthesis for API use (Kokoro singleton)."""
+    with _tts_synth_lock:
+        tts = KokoroTTS()
+        return tts.synthesize_to_wav_bytes(text)
+
+
 def speak(text):
     """
     Convenience function to speak text using the KokoroTTS singleton.

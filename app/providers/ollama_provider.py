@@ -4,6 +4,8 @@ import os
 import sys
 import base64
 from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -47,7 +49,7 @@ class OllamaProvider:
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
 
-    def _get_memory_context(self):
+    def _get_memory_context(self, emit: Callable[[str], None] = print):
         """Retrieves and formats current memory state for injection into the prompt."""
         try:
             from app.core.memory import memory
@@ -66,18 +68,25 @@ class OllamaProvider:
             
             return f"{SYSTEM_PROMPT_CORE}\n\n{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
         except Exception as e:
-            print(f"[Memory] Error loading context: {e}")
+            emit(f"[Memory] Error loading context: {e}")
             return SYSTEM_PROMPT_CORE
 
-    def chat(self, messages):
+    def chat(self, messages: List[Dict[str, Any]], on_log: Optional[Callable[[str], None]] = None) -> str:
         """
         Sends a list of messages to Ollama and returns the response.
         Handles tool calls if the model requests them.
+
+        Mutates ``messages`` in place (Ollama message list including tool calls).
+
+        Args:
+            messages: Conversation history; a system message is injected or updated at index 0.
+            on_log: If set, log lines go here instead of stdout (e.g. API clients).
         """
+        emit = on_log or print
         url = f"{self.base_url}/api/chat"
         
         # Inject memory context as a system message if not present
-        memory_ctx = self._get_memory_context()
+        memory_ctx = self._get_memory_context(emit)
         
         # Check if first message is system, if so update it, otherwise insert
         if messages and messages[0].get("role") == "system":
@@ -110,12 +119,12 @@ class OllamaProvider:
                     return content.replace("*", "").replace("#", "")
 
                 # Process each tool call
-                print(f"[Tools] Model requested {len(tool_calls)} tool(s)...")
+                emit(f"[Tools] Model requested {len(tool_calls)} tool(s)...")
                 for tool_call in tool_calls:
                     func_name = tool_call["function"]["name"]
                     func_args = tool_call["function"]["arguments"]
                     
-                    print(f"[Tools] Executing: {func_name}({func_args})")
+                    emit(f"[Tools] Executing: {func_name}({func_args})")
                     result = registry.call_tool(func_name, func_args)
                     
                     # Check if the result is an image path (from vision tools)
@@ -138,11 +147,11 @@ class OllamaProvider:
                                     "content": "Here is the captured image. Describe what you see.",
                                     "images": [img_base64]
                                 })
-                                print(f"[Vision] Attached image to message: {img_path}")
+                                emit(f"[Vision] Attached image to message: {img_path}")
                                 continue  # skip the normal tool_message append below
 
                             except Exception as e:
-                                print(f"[Vision] Error encoding image: {e}")
+                                emit(f"[Vision] Error encoding image: {e}")
                                 result = f"Error encoding image: {e}"
                         else:
                             result = f"Image file not found at {img_path}"

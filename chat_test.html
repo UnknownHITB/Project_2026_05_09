@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Assistant API — local test</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --border: #2d3a4d;
+      --text: #e6edf3;
+      --muted: #8b9cb3;
+      --accent: #3d9eff;
+      --accent-dim: #2563a8;
+      --ok: #3ecf8e;
+      --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header h1 {
+      margin: 0 0 0.35rem;
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+    header p {
+      margin: 0;
+      font-size: 0.85rem;
+      color: var(--muted);
+      max-width: 56rem;
+    }
+    main {
+      max-width: 56rem;
+      margin: 0 auto;
+      padding: 1rem 1.25rem 2rem;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    section h2 {
+      margin: 0 0 0.75rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    input[type="text"],
+    input[type="url"],
+    textarea {
+      width: 100%;
+      padding: 0.5rem 0.65rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    textarea { min-height: 5rem; resize: vertical; font-family: inherit; }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: flex-end;
+      margin-bottom: 0.65rem;
+    }
+    .row:last-child { margin-bottom: 0; }
+    .grow { flex: 1 1 12rem; }
+    button {
+      cursor: pointer;
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem 0.85rem;
+      font-size: 0.9rem;
+      font-weight: 500;
+      background: var(--accent);
+      color: #0a0e14;
+    }
+    button:hover { filter: brightness(1.08); }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      filter: none;
+    }
+    button.secondary {
+      background: var(--border);
+      color: var(--text);
+    }
+    button.danger {
+      background: #7f1d1d;
+      color: #fecaca;
+    }
+    .status {
+      font-size: 0.8rem;
+      padding: 0.4rem 0.55rem;
+      border-radius: 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      margin-top: 0.5rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .status.ok { border-color: var(--ok); color: var(--ok); }
+    .status.err { border-color: var(--err); color: var(--err); }
+    #transcript,
+    #replyOut,
+    #logsOut {
+      margin-top: 0.5rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      font-size: 0.88rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 14rem;
+      overflow: auto;
+    }
+    #logsOut {
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    #chatLog {
+      margin-top: 0.75rem;
+      max-height: 18rem;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem;
+      background: var(--bg);
+      font-size: 0.88rem;
+    }
+    #chatLog .u { color: var(--accent); }
+    #chatLog .a { color: var(--ok); }
+    audio { width: 100%; margin-top: 0.5rem; }
+    code { font-size: 0.85em; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Assistant API — browser test</h1>
+    <p>
+      Start the server: <code>uvicorn app.server:app --host 0.0.0.0 --port 8765</code>.
+      Set the API base URL (e.g. Tailscale <code>http://100.x.y.z:8765</code>). If opening this file as <code>file://</code> fails to reach the API, run
+      <code>python -m http.server 8080</code> in this folder and open <code>http://127.0.0.1:8080/chat_test.html</code>.
+    </p>
+  </header>
+  <main>
+    <section>
+      <h2>Connection</h2>
+      <div class="row">
+        <div class="grow">
+          <label for="baseUrl">API base URL (no trailing slash)</label>
+          <input type="url" id="baseUrl" value="http://127.0.0.1:8765" autocomplete="off" />
+        </div>
+        <button type="button" id="btnHealth">Health</button>
+      </div>
+      <div id="healthStatus" class="status" hidden></div>
+    </section>
+
+    <section>
+      <h2>Session</h2>
+      <div class="row">
+        <div class="grow">
+          <label for="sessionId">Session ID</label>
+          <input type="text" id="sessionId" placeholder="Create a new session or paste an ID" autocomplete="off" />
+        </div>
+        <button type="button" id="btnNewSession">New session</button>
+        <button type="button" class="secondary" id="btnMeta">Meta</button>
+        <button type="button" class="secondary" id="btnMessages">Load messages</button>
+        <button type="button" class="danger" id="btnDelete">Delete</button>
+      </div>
+      <div id="sessionStatus" class="status" hidden></div>
+    </section>
+
+    <section>
+      <h2>Warmup (preload models)</h2>
+      <div class="row">
+        <button type="button" class="secondary" id="btnWarmStt">STT</button>
+        <button type="button" class="secondary" id="btnWarmTts">TTS</button>
+        <button type="button" id="btnWarmBoth">Both</button>
+      </div>
+      <div id="warmStatus" class="status" hidden></div>
+    </section>
+
+    <section>
+      <h2>Chat</h2>
+      <label for="message">Message</label>
+      <textarea id="message" placeholder="Type a message…"></textarea>
+      <div class="row" style="margin-top: 0.65rem;">
+        <button type="button" id="btnSend">Send</button>
+      </div>
+      <div id="chatStatus" class="status" hidden></div>
+      <div id="logsOut" hidden></div>
+      <div id="chatLog"></div>
+    </section>
+
+    <section>
+      <h2>Voice (WAV upload)</h2>
+      <p style="margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--muted);">
+        POST raw WAV bytes to <code>/sessions/{id}/voice/wav</code>. Use a mono 16 kHz WAV for best STT results.
+      </p>
+      <div class="row">
+        <div class="grow">
+          <label for="wavFile">WAV file</label>
+          <input type="file" id="wavFile" accept=".wav,audio/wav" />
+        </div>
+        <button type="button" id="btnVoice">Upload &amp; chat</button>
+      </div>
+      <div id="voiceStatus" class="status" hidden></div>
+      <div id="transcript" hidden></div>
+      <div id="replyOut" hidden></div>
+    </section>
+
+    <section>
+      <h2>TTS</h2>
+      <label for="ttsText">Text to speak (WAV from server)</label>
+      <textarea id="ttsText" rows="2" placeholder="Reply text to hear…"></textarea>
+      <div class="row" style="margin-top: 0.65rem;">
+        <button type="button" id="btnTts">Fetch WAV &amp; play</button>
+      </div>
+      <audio id="ttsAudio" controls></audio>
+      <div id="ttsStatus" class="status" hidden></div>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function base() {
+      return $("baseUrl").value.replace(/\/+$/, "");
+    }
+
+    function show(el, text, cls) {
+      el.hidden = false;
+      el.textContent = text;
+      el.className = "status" + (cls ? " " + cls : "");
+    }
+
+    function hide(el) {
+      el.hidden = true;
+      el.textContent = "";
+      el.className = "status";
+    }
+
+    async function parseJsonSafe(res) {
+      const t = await res.text();
+      try {
+        return JSON.parse(t);
+      } catch {
+        return { _raw: t };
+      }
+    }
+
+    $("btnHealth").addEventListener("click", async () => {
+      const out = $("healthStatus");
+      hide(out);
+      try {
+        const res = await fetch(base() + "/health");
+        const data = await parseJsonSafe(res);
+        show(out, JSON.stringify(data, null, 2), res.ok ? "ok" : "err");
+      } catch (e) {
+        show(out, String(e), "err");
+      }
+    });
+
+    $("btnNewSession").addEventListener("click", async () => {
+      const out = $("sessionStatus");
+      hide(out);
+      try {
+        const res = await fetch(base() + "/sessions", { method: "POST" });
+        const data = await parseJsonSafe(res);
+        if (!res.ok) throw new Error(JSON.stringify(data));
+        $("sessionId").value = data.session_id || "";
+        show(out, "Session created:\n" + JSON.stringify(data, null, 2), "ok");
+      } catch (e) {
+        show(out, String(e), "err");
+      }
+    });
+
+    $("btnMeta").addEventListener("click", async () => {
+      const sid = $("sessionId").value.trim();
+      const out = $("sessionStatus");
+      if (!sid) {
+        show(out, "Enter a session ID.", "err");
+        return;
+      }
+      hide(out);
+      try {
+        const res = await fetch(base() + "/sessions/" + encodeURIComponent(sid));
+        const data = await parseJsonSafe(res);
+        show(out, JSON.stringify(data, null, 2), res.ok ? "ok" : "err");
+      } catch (e) {
+        show(out, String(e), "err");
+      }
+    });
+
+    $("btnMessages").addEventListener("click", async () => {
+      const sid = $("sessionId").value.trim();
+      const out = $("sessionStatus");
+      if (!sid) {
+        show(out, "Enter a session ID.", "err");
+        return;
+      }
+      hide(out);
+      try {
+        const res = await fetch(base() + "/sessions/" + encodeURIComponent(sid) + "/messages");
+        const data = await parseJsonSafe(res);
+        show(out, JSON.stringify(data, null, 2), res.ok ? "ok" : "err");
+      } catch (e) {
+        show(out, String(e), "err");
+      }
+    });
+
+    $("btnDelete").addEventListener("click", async () => {
+      const sid = $("sessionId").value.trim();
+      const out = $("sessionStatus");
+      if (!sid) {
+        show(out, "Enter a session ID.", "err");
+        return;
+      }
+      if (!confirm("Delete session " + sid + "?")) return;
+      hide(out);
+      try {
+        const res = await fetch(base() + "/sessions/" + encodeURIComponent(sid), { method: "DELETE" });
+        const data = await parseJsonSafe(res);
+        show(out, JSON.stringify(data, null, 2), res.ok ? "ok" : "err");
+        if (res.ok) $("sessionId").value = "";
+      } catch (e) {
+        show(out, String(e), "err");
+      }
+    });
+
+    async function warmup(stt, tts) {
+      const out = $("warmStatus");
+      hide(out);
+      try {
+        const res = await fetch(base() + "/warmup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stt, tts }),
+        });
+        const data = await parseJsonSafe(res);
+        show(out, JSON.stringify(data, null, 2), res.ok ? "ok" : "err");
+      } catch (e) {
+        show(out, String(e), "err");
+      }
+    }
+    $("btnWarmStt").addEventListener("click", () => warmup(true, false));
+    $("btnWarmTts").addEventListener("click", () => warmup(false, true));
+    $("btnWarmBoth").addEventListener("click", () => warmup(true, true));
+
+    function appendChat(role, text) {
+      const log = $("chatLog");
+      const div = document.createElement("div");
+      div.className = role === "user" ? "u" : "a";
+      div.textContent = (role === "user" ? "You: " : "AI: ") + text;
+      log.appendChild(div);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    $("btnSend").addEventListener("click", async () => {
+      const sid = $("sessionId").value.trim();
+      const msg = $("message").value.trim();
+      const out = $("chatStatus");
+      const logsEl = $("logsOut");
+      hide(out);
+      logsEl.hidden = true;
+      if (!sid) {
+        show(out, "Create or paste a session ID first.", "err");
+        return;
+      }
+      if (!msg) {
+        show(out, "Enter a message.", "err");
+        return;
+      }
+      try {
+        const res = await fetch(base() + "/sessions/" + encodeURIComponent(sid) + "/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg }),
+        });
+        const data = await parseJsonSafe(res);
+        if (!res.ok) throw new Error(JSON.stringify(data, null, 2));
+        appendChat("user", msg);
+        appendChat("assistant", data.reply || "");
+        $("message").value = "";
+        if (data.logs && data.logs.length) {
+          logsEl.hidden = false;
+          logsEl.textContent = data.logs.join("\n");
+        }
+        show(out, "OK (" + res.status + ")", "ok");
+      } catch (e) {
+        show(out, String(e), "err");
+      }
+    });
+
+    $("btnVoice").addEventListener("click", async () => {
+      const sid = $("sessionId").value.trim();
+      const file = $("wavFile").files[0];
+      const st = $("voiceStatus");
+      const tr = $("transcript");
+      const rep = $("replyOut");
+      tr.hidden = rep.hidden = true;
+      hide(st);
+      if (!sid) {
+        show(st, "Create or paste a session ID first.", "err");
+        return;
+      }
+      if (!file) {
+        show(st, "Choose a WAV file.", "err");
+        return;
+      }
+      try {
+        const buf = await file.arrayBuffer();
+        const res = await fetch(base() + "/sessions/" + encodeURIComponent(sid) + "/voice/wav", {
+          method: "POST",
+          headers: { "Content-Type": "audio/wav" },
+          body: buf,
+        });
+        const data = await parseJsonSafe(res);
+        if (!res.ok) throw new Error(JSON.stringify(data, null, 2));
+        if (data.error) {
+          show(st, "error: " + data.error, "err");
+        } else {
+          show(st, "OK (" + res.status + ")", "ok");
+        }
+        if (data.transcript != null) {
+          tr.hidden = false;
+          tr.textContent = "Transcript: " + data.transcript;
+        }
+        if (data.reply != null) {
+          rep.hidden = false;
+          rep.textContent = "Reply: " + data.reply;
+          appendChat("user", "[voice] " + (data.transcript || ""));
+          appendChat("assistant", data.reply);
+        }
+      } catch (e) {
+        show(st, String(e), "err");
+      }
+    });
+
+    $("btnTts").addEventListener("click", async () => {
+      const text = $("ttsText").value.trim();
+      const audio = $("ttsAudio");
+      const st = $("ttsStatus");
+      hide(st);
+      audio.removeAttribute("src");
+      if (!text) {
+        show(st, "Enter text for TTS.", "err");
+        return;
+      }
+      try {
+        const res = await fetch(base() + "/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        if (!res.ok) {
+          const errBody = await parseJsonSafe(res);
+          throw new Error(JSON.stringify(errBody, null, 2));
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        audio.src = url;
+        audio.play().catch(() => {});
+        show(st, "Playing WAV (" + blob.size + " bytes)", "ok");
+      } catch (e) {
+        show(st, String(e), "err");
+      }
+    });
+  </script>
+</body>
+</html>
