@@ -48,6 +48,7 @@ class OllamaProvider:
         # Priority: constructor argument > environment variable > default value
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3")
+        self.session = requests.Session()
 
     def _get_memory_context(self, emit: Callable[[str], None] = print):
         """Retrieves and formats current memory state for injection into the prompt."""
@@ -103,7 +104,8 @@ class OllamaProvider:
             }
             
             try:
-                response = requests.post(url, json=payload)
+                # Optimization: Use persistent session to reduce connection overhead
+                response = self.session.post(url, json=payload)
                 response.raise_for_status()
                 response_json = response.json()
                 message = response_json.get("message", {})
