@@ -48,10 +48,16 @@ app.add_middleware(
 )
 
 
+_persistent_provider = None
+
+
 def _provider():
+    global _persistent_provider
     from app.providers.ollama_provider import OllamaProvider
 
-    return OllamaProvider()
+    if _persistent_provider is None:
+        _persistent_provider = OllamaProvider()
+    return _persistent_provider
 
 
 def _session_store():
