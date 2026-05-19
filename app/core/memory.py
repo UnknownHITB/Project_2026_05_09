@@ -173,5 +173,31 @@ class MemoryManager:
             conn.commit()
         return f"Rule '{name}' has been deleted."
 
+    def get_full_context(self, entity='user', episode_limit=3):
+        """
+        Performance Optimization: Retrieves semantic, episodic, and procedural memory
+        in a single database connection to reduce overhead.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # 1. Semantic facts
+            cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
+            facts = cursor.fetchall()
+
+            # 2. Episodic summaries
+            cursor.execute("SELECT summary FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (episode_limit,))
+            episodes = [row[0] for row in cursor.fetchall()]
+
+            # 3. Procedural rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+        return {
+            "facts": facts,
+            "episodes": episodes,
+            "rules": rules
+        }
+
 # Global instance
 memory = MemoryManager()
