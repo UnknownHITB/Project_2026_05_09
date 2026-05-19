@@ -55,16 +55,19 @@ class OllamaProvider:
         try:
             from app.core.memory import memory
             
+            # Optimization: Use a single call to fetch all context types
+            ctx = memory.get_full_context(entity='user', episode_limit=3)
+
             # Semantic: User Facts
-            facts = memory.get_facts(entity='user')
+            facts = ctx["facts"]
             semantic_text = "KNOWN FACTS ABOUT USER:\n" + ("\n".join([f"- {a}: {v}" for a, v in facts]) if facts else "- None yet.")
             
             # Episodic: Recent summaries
-            episodes = memory.get_recent_episodes(limit=3)
-            episodic_text = "PAST CONVERSATION SUMMARIES:\n" + ("\n".join([f"- {s}" for s, _ in episodes]) if episodes else "- No past history.")
+            episodes = ctx["episodes"]
+            episodic_text = "PAST CONVERSATION SUMMARIES:\n" + ("\n".join([f"- {s}" for s in episodes]) if episodes else "- No past history.")
             
             # Procedural: System Rules
-            rules = memory.get_all_rules()
+            rules = ctx["rules"]
             procedural_text = "CORE SYSTEM RULES:\n" + ("\n".join([f"- {r}" for r in rules]) if rules else "- Be helpful and concise.")
             
             return f"{SYSTEM_PROMPT_CORE}\n\n{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
