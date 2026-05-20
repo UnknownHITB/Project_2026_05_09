@@ -149,6 +149,32 @@ class MemoryManager:
             cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()
 
+    def get_full_context(self, entity='user', episode_limit=5):
+        """
+        Retrieves semantic, episodic, and procedural memory in a single database connection.
+        Optimizes per-turn context injection by reducing connection overhead.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # Semantic: User Facts
+            cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
+            facts = cursor.fetchall()
+
+            # Episodic: Recent summaries
+            cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (episode_limit,))
+            episodes = cursor.fetchall()
+
+            # Procedural: System Rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+            return {
+                "facts": facts,
+                "episodes": episodes,
+                "rules": rules
+            }
+
     # --- Procedural Memory Methods ---
     def set_rule(self, name, content):
         with sqlite3.connect(self.db_path) as conn:
