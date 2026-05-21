@@ -48,10 +48,18 @@ app.add_middleware(
 )
 
 
+_cached_provider = None
+
+
 def _provider():
+    global _cached_provider
     from app.providers.ollama_provider import OllamaProvider
 
-    return OllamaProvider()
+    if _cached_provider is None:
+        # Optimization: Reuse the same provider instance to benefit from requests.Session()
+        # TCP connection pooling across all chat turns and sessions.
+        _cached_provider = OllamaProvider()
+    return _cached_provider
 
 
 def _session_store():
