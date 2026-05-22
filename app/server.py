@@ -47,11 +47,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_cached_provider = None
+
 
 def _provider():
+    global _cached_provider
     from app.providers.ollama_provider import OllamaProvider
 
-    return OllamaProvider()
+    if _cached_provider is None:
+        # Optimization: Reuse the same provider (and its persistent requests.Session)
+        # to ensure TCP connection pooling for Ollama API calls.
+        _cached_provider = OllamaProvider()
+    return _cached_provider
 
 
 def _session_store():
