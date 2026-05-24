@@ -123,21 +123,34 @@ class MemoryManager:
         query_vec = np.array(query_embedding, dtype=np.float32)
         # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL")
+            cursor.execute(
+                "SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL"
+            )
             results = cursor.fetchall()
 
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Optimization: Vectorized cosine similarity using matrix operations
+        # This is significantly faster than a Python loop for large datasets.
+        summaries, vectors, timestamps = zip(*results)
+        # Convert all blobs to a single matrix [N, D]
+        all_vecs = np.frombuffer(b"".join(vectors), dtype=np.float32).reshape(
+            len(vectors), -1
+        )
+
+        # Dot product [N, D] @ [D] -> [N]
+        dots = np.dot(all_vecs, query_vec)
+        # Vectorized norms [N]
+        norms = np.linalg.norm(all_vecs, axis=1)
+
+        # Avoid division by zero
+        similarities = dots / (query_norm * norms + 1e-9)
+
+        scored_results = list(zip(summaries, timestamps, similarities))
 
         # Sort by similarity
         scored_results.sort(key=lambda x: x[2], reverse=True)
@@ -172,6 +185,49 @@ class MemoryManager:
             cursor.execute("DELETE FROM procedural_memory WHERE rule_name = ?", (name,))
             conn.commit()
         return f"Rule '{name}' has been deleted."
+
+    def get_full_context(self, entity="user", episode_limit=3):
+        """
+        Retrieves semantic, episodic, and procedural memory in a single database connection.
+        Optimized to reduce connection overhead.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # Semantic: User Facts
+            cursor.execute(
+                "SELECT attribute, value FROM semantic_memory WHERE entity = ?",
+                (entity,),
+            )
+            facts = cursor.fetchall()
+
+            # Episodic: Recent summaries
+            cursor.execute(
+                "SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?",
+                (episode_limit,),
+            )
+            episodes = cursor.fetchall()
+
+            # Procedural: System Rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+        semantic_text = "KNOWN FACTS ABOUT USER:\n" + (
+            "\n".join([f"- {a}: {v}" for a, v in facts]) if facts else "- None yet."
+        )
+        episodic_text = "PAST CONVERSATION SUMMARIES:\n" + (
+            "\n".join([f"- {s}" for s, _ in episodes])
+            if episodes
+            else "- No past history."
+        )
+        procedural_text = "CORE SYSTEM RULES:\n" + (
+            "\n".join([f"- {r}" for r in rules])
+            if rules
+            else "- Be helpful and concise."
+        )
+
+        return f"{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
+
 
 # Global instance
 memory = MemoryManager()

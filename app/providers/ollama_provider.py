@@ -54,20 +54,10 @@ class OllamaProvider:
         """Retrieves and formats current memory state for injection into the prompt."""
         try:
             from app.core.memory import memory
-            
-            # Semantic: User Facts
-            facts = memory.get_facts(entity='user')
-            semantic_text = "KNOWN FACTS ABOUT USER:\n" + ("\n".join([f"- {a}: {v}" for a, v in facts]) if facts else "- None yet.")
-            
-            # Episodic: Recent summaries
-            episodes = memory.get_recent_episodes(limit=3)
-            episodic_text = "PAST CONVERSATION SUMMARIES:\n" + ("\n".join([f"- {s}" for s, _ in episodes]) if episodes else "- No past history.")
-            
-            # Procedural: System Rules
-            rules = memory.get_all_rules()
-            procedural_text = "CORE SYSTEM RULES:\n" + ("\n".join([f"- {r}" for r in rules]) if rules else "- Be helpful and concise.")
-            
-            return f"{SYSTEM_PROMPT_CORE}\n\n{procedural_text}\n\n{semantic_text}\n\n{episodic_text}"
+
+            # Optimization: Use consolidated retrieval method to reduce DB connection overhead
+            full_context = memory.get_full_context(entity="user", episode_limit=3)
+            return f"{SYSTEM_PROMPT_CORE}\n\n{full_context}"
         except Exception as e:
             emit(f"[Memory] Error loading context: {e}")
             return SYSTEM_PROMPT_CORE
