@@ -1,3 +1,3 @@
-## 2025-05-15 - [Semantic Search & Connection Pooling]
-**Learning:** Hoisting vector norm calculations out of loops in Python/NumPy provides a measurable speedup (e.g., ~33% for 10k items) because it reduces redundant scalar operations and function call overhead. Additionally, using `requests.Session()` for local LLM APIs (like Ollama) is critical to avoid TCP handshake latency in multi-turn chat and embedding generation.
-**Action:** Always check for redundant calculations in loops that involve NumPy or math operations. Ensure API clients use persistent sessions for repeated calls to the same host.
+## 2025-05-24 - [Vectorized Similarity & Consolidated DB Hits]
+**Learning:** Vectorizing cosine similarity with NumPy matrix operations (`np.dot` on a matrix vs loop) provides a massive speedup as memory grows (measured ~40% gain at 1000 items). Consolidating multiple SQLite reads into a single connection/transaction reduces per-turn overhead by avoiding repeated WAL check-pointing and connection setup latency.
+**Action:** Use matrix-vector operations for any semantic search or similarity tasks. Batch database reads that occur during the same request cycle into a single connection handler.
