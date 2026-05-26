@@ -14,6 +14,8 @@ class MemoryManager:
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # Optimization: Enable WAL mode for better concurrency and performance
+            cursor.execute("PRAGMA journal_mode=WAL")
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS semantic_memory (
@@ -172,6 +174,32 @@ class MemoryManager:
             cursor.execute("DELETE FROM procedural_memory WHERE rule_name = ?", (name,))
             conn.commit()
         return f"Rule '{name}' has been deleted."
+
+    def get_full_context(self, entity='user', episodic_limit=3):
+        """
+        Optimization: Fetches semantic, episodic, and procedural memory in a single
+        database connection to reduce overhead.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # Semantic: Facts about entity
+            cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
+            facts = cursor.fetchall()
+
+            # Episodic: Recent summaries
+            cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (episodic_limit,))
+            episodes = cursor.fetchall()
+
+            # Procedural: System rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+            return {
+                "facts": facts,
+                "episodes": episodes,
+                "rules": rules
+            }
 
 # Global instance
 memory = MemoryManager()
