@@ -13,6 +13,7 @@ class MemoryManager:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -121,7 +122,6 @@ class MemoryManager:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
         
         with sqlite3.connect(self.db_path) as conn:
@@ -132,16 +132,26 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized optimization: using NumPy matrix operations for speed
+        summaries = [r[0] for r in results]
+        vectors = np.vstack([np.frombuffer(r[1], dtype=np.float32) for r in results])
+        timestamps = [r[2] for r in results]
 
-        # Sort by similarity
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        return scored_results[:limit]
+        dot_products = np.dot(vectors, query_vec)
+        norms = np.linalg.norm(vectors, axis=1)
+
+        # Avoid division by zero
+        denominator = query_norm * norms
+        similarities = np.divide(
+            dot_products,
+            denominator,
+            out=np.zeros_like(dot_products),
+            where=denominator != 0
+        )
+
+        # Sort and take top N
+        top_indices = np.argsort(similarities)[::-1][:limit]
+        return [(summaries[i], timestamps[i], float(similarities[i])) for i in top_indices]
 
     def get_recent_episodes(self, limit=5):
         with sqlite3.connect(self.db_path) as conn:
@@ -172,6 +182,32 @@ class MemoryManager:
             cursor.execute("DELETE FROM procedural_memory WHERE rule_name = ?", (name,))
             conn.commit()
         return f"Rule '{name}' has been deleted."
+
+    def get_full_context(self, entity='user', episode_limit=3):
+        """
+        Consolidates facts, recent episodes, and rules into a single database retrieval.
+        Reduces connection overhead for high-frequency chat turns.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # 1. Facts
+            cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
+            facts = cursor.fetchall()
+
+            # 2. Episodes
+            cursor.execute("SELECT summary FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (episode_limit,))
+            episodes = [row[0] for row in cursor.fetchall()]
+
+            # 3. Rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+        return {
+            "facts": facts,
+            "episodes": episodes,
+            "rules": rules
+        }
 
 # Global instance
 memory = MemoryManager()

@@ -1,4 +1,7 @@
-from ddgs import DDGS
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    from ddgs import DDGS
 from .registry import registry
 
 def web_search(query: str, max_results: int = 5) -> str:
