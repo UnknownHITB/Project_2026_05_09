@@ -5,6 +5,7 @@ import numpy as np
 import requests
 from datetime import datetime
 
+
 class MemoryManager:
     def __init__(self, db_path="memory.sqlite"):
         self.db_path = db_path
@@ -13,6 +14,8 @@ class MemoryManager:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            # Optimization: Use Write-Ahead Logging for better concurrency and write performance
+            conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -44,23 +47,26 @@ class MemoryManager:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            
+
             # Simple migration: Add vector column if it doesn't exist
             cursor.execute("PRAGMA table_info(episodic_memory)")
             columns = [col[1] for col in cursor.fetchall()]
-            if 'vector' not in columns:
+            if "vector" not in columns:
                 cursor.execute("ALTER TABLE episodic_memory ADD COLUMN vector BLOB")
-                
+
             conn.commit()
 
     # --- Semantic Memory Methods ---
     def store_fact(self, entity, attribute, value):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT OR REPLACE INTO semantic_memory (entity, attribute, value)
                 VALUES (?, ?, ?)
-            """, (entity, attribute, value))
+            """,
+                (entity, attribute, value),
+            )
             conn.commit()
         return f"Stored fact: {entity}'s {attribute} is {value}"
 
@@ -68,7 +74,10 @@ class MemoryManager:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             if entity:
-                cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
+                cursor.execute(
+                    "SELECT attribute, value FROM semantic_memory WHERE entity = ?",
+                    (entity,),
+                )
             else:
                 cursor.execute("SELECT entity, attribute, value FROM semantic_memory")
             return cursor.fetchall()
@@ -76,7 +85,10 @@ class MemoryManager:
     def delete_fact(self, entity, attribute):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM semantic_memory WHERE entity = ? AND attribute = ?", (entity, attribute))
+            cursor.execute(
+                "DELETE FROM semantic_memory WHERE entity = ? AND attribute = ?",
+                (entity, attribute),
+            )
             conn.commit()
         return f"Forgotten fact: {entity}'s {attribute}."
 
@@ -89,12 +101,14 @@ class MemoryManager:
             url = f"{os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')}/api/embeddings"
             # Optimization: Use persistent session to reduce connection overhead
             response = self.session.post(url, json={"model": model, "prompt": text})
-            
+
             if response.status_code != 200:
                 # Fallback to main model if nomic is missing
                 main_model = os.getenv("OLLAMA_MODEL", "llama3")
-                response = self.session.post(url, json={"model": main_model, "prompt": text})
-            
+                response = self.session.post(
+                    url, json={"model": main_model, "prompt": text}
+                )
+
             response.raise_for_status()
             return response.json()["embedding"]
         except Exception as e:
@@ -103,14 +117,19 @@ class MemoryManager:
 
     def add_episode(self, summary, keywords=""):
         embedding = self._get_embedding(summary)
-        vector_blob = np.array(embedding, dtype=np.float32).tobytes() if embedding else None
-        
+        vector_blob = (
+            np.array(embedding, dtype=np.float32).tobytes() if embedding else None
+        )
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT INTO episodic_memory (summary, keywords, vector)
                 VALUES (?, ?, ?)
-            """, (summary, keywords, vector_blob))
+            """,
+                (summary, keywords, vector_blob),
+            )
             conn.commit()
         return "Episode recorded with semantic embedding."
 
@@ -121,42 +140,58 @@ class MemoryManager:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
+        # Optimization: Pre-calculate query norm once
         query_norm = np.linalg.norm(query_vec)
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL")
+            cursor.execute(
+                "SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL"
+            )
             results = cursor.fetchall()
 
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Optimization: Fully vectorized similarity calculation using NumPy
+        # This is significantly faster than row-by-row dot products as memory grows.
+        summaries = [r[0] for r in results]
+        timestamps = [r[2] for r in results]
+        # vstack is efficient for converting list of arrays to 2D matrix
+        vectors = np.vstack([np.frombuffer(r[1], dtype=np.float32) for r in results])
 
-        # Sort by similarity
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        return scored_results[:limit]
+        # Vectorized cosine similarity: (V . q) / (||V|| * ||q||)
+        dots = np.dot(vectors, query_vec)
+        norms = np.linalg.norm(vectors, axis=1)
+        similarities = dots / (query_norm * norms)
+
+        # Get top indices
+        top_indices = np.argsort(similarities)[-limit:][::-1]
+
+        return [
+            (summaries[i], timestamps[i], float(similarities[i])) for i in top_indices
+        ]
 
     def get_recent_episodes(self, limit=5):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (limit,))
+            cursor.execute(
+                "SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
             return cursor.fetchall()
 
     # --- Procedural Memory Methods ---
     def set_rule(self, name, content):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(
+                """
                 INSERT OR REPLACE INTO procedural_memory (rule_name, rule_content)
                 VALUES (?, ?)
-            """, (name, content))
+            """,
+                (name, content),
+            )
             conn.commit()
         return f"Rule '{name}' updated."
 
@@ -172,6 +207,35 @@ class MemoryManager:
             cursor.execute("DELETE FROM procedural_memory WHERE rule_name = ?", (name,))
             conn.commit()
         return f"Rule '{name}' has been deleted."
+
+    def get_full_context(self, entity="user", episode_limit=3):
+        """
+        Optimization: Retrieves facts, recent episodes, and rules in a single
+        database connection to reduce connection overhead.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # 1. Facts
+            cursor.execute(
+                "SELECT attribute, value FROM semantic_memory WHERE entity = ?",
+                (entity,),
+            )
+            facts = cursor.fetchall()
+
+            # 2. Episodes
+            cursor.execute(
+                "SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?",
+                (episode_limit,),
+            )
+            episodes = cursor.fetchall()
+
+            # 3. Rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+            return {"facts": facts, "episodes": episodes, "rules": rules}
+
 
 # Global instance
 memory = MemoryManager()
