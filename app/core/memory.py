@@ -121,8 +121,9 @@ class MemoryManager:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
+        if query_norm == 0:
+            return self.get_recent_episodes(limit)
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -132,12 +133,37 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized similarity calculation for significant speedup on larger datasets
+        summaries = [r[0] for r in results]
+        timestamps = [r[2] for r in results]
+
+        try:
+            # Batch load all vectors from blobs and reshape into a matrix
+            all_vectors_raw = b''.join([r[1] for r in results])
+            vectors = np.frombuffer(all_vectors_raw, dtype=np.float32).reshape(len(results), -1)
+
+            # Dot products and norms for all vectors at once
+            dots = np.dot(vectors, query_vec)
+            norms = np.linalg.norm(vectors, axis=1)
+
+            # Avoid division by zero
+            denom = query_norm * norms
+            denom[denom == 0] = 1e-10
+            similarities = dots / denom
+
+            scored_results = [
+                (summaries[i], timestamps[i], float(similarities[i]))
+                for i in range(len(summaries))
+            ]
+        except Exception as e:
+            # Fallback to iterative if vector shapes are inconsistent or other issues occur
+            print(f"[Memory] Vectorization failed, falling back: {e}")
+            scored_results = []
+            for summary, vector_blob, timestamp in results:
+                stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
+                v_norm = np.linalg.norm(stored_vec)
+                similarity = np.dot(query_vec, stored_vec) / (query_norm * v_norm) if v_norm > 0 else 0
+                scored_results.append((summary, timestamp, similarity))
 
         # Sort by similarity
         scored_results.sort(key=lambda x: x[2], reverse=True)
