@@ -115,14 +115,15 @@ class MemoryManager:
         return "Episode recorded with semantic embedding."
 
     def semantic_search(self, query, limit=3):
-        """Finds episodes most similar to the query using cosine similarity."""
+        """Finds episodes most similar to the query using vectorized cosine similarity."""
         query_embedding = self._get_embedding(query)
         if not query_embedding:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
+        if query_norm == 0:
+            return self.get_recent_episodes(limit)
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -132,16 +133,25 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorization: Batch process all similarities using NumPy
+        # 1. Consolidate all binary blobs into a single matrix
+        summaries, vectors_blobs, timestamps = zip(*results)
 
-        # Sort by similarity
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        return scored_results[:limit]
+        # np.frombuffer on a joined byte string is very efficient for large datasets
+        all_vectors = np.frombuffer(b''.join(vectors_blobs), dtype=np.float32).reshape(len(results), -1)
+
+        # 2. Calculate cosine similarity in batch: (A dot B) / (||A|| * ||B||)
+        dot_products = np.dot(all_vectors, query_vec)
+        vector_norms = np.linalg.norm(all_vectors, axis=1)
+
+        # Handle potential zero norms to avoid division by zero
+        vector_norms[vector_norms == 0] = 1.0
+        similarities = dot_products / (query_norm * vector_norms)
+
+        # 3. Rank and return top results
+        top_indices = np.argsort(similarities)[::-1][:limit]
+
+        return [(summaries[i], timestamps[i], float(similarities[i])) for i in top_indices]
 
     def get_recent_episodes(self, limit=5):
         with sqlite3.connect(self.db_path) as conn:
