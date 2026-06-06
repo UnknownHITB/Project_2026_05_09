@@ -132,16 +132,24 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized implementation for significantly better scalability
+        summaries, vector_blobs, timestamps = zip(*results)
 
-        # Sort by similarity
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        return scored_results[:limit]
+        # Efficiently convert blobs to a single matrix in one operation
+        all_vectors = np.frombuffer(b"".join(vector_blobs), dtype=np.float32).reshape(len(results), -1)
+
+        # Calculate all norms at once
+        stored_norms = np.linalg.norm(all_vectors, axis=1)
+
+        # Vectorized cosine similarity: dot product / (norm1 * norm2)
+        # We use a small epsilon to avoid division by zero
+        denominator = query_norm * stored_norms
+        similarities = np.dot(all_vectors, query_vec) / np.maximum(denominator, 1e-9)
+
+        # Use argsort for fast top-K retrieval (returns indices of top similarities)
+        top_indices = np.argsort(similarities)[::-1][:limit]
+
+        return [(summaries[i], timestamps[i], float(similarities[i])) for i in top_indices]
 
     def get_recent_episodes(self, limit=5):
         with sqlite3.connect(self.db_path) as conn:
