@@ -121,8 +121,6 @@ class MemoryManager:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
-        query_norm = np.linalg.norm(query_vec)
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -132,16 +130,29 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized calculation: significantly faster for larger item counts
+        summaries, vectors, timestamps = zip(*results)
 
-        # Sort by similarity
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        return scored_results[:limit]
+        # Fast matrix creation: join all blobs then convert to matrix in one step
+        matrix = np.frombuffer(b''.join(vectors), dtype=np.float32).reshape(len(vectors), -1)
+
+        # Cosine similarity: (matrix @ query_vec) / (||matrix|| * ||query_vec||)
+        dot_products = matrix @ query_vec
+
+        matrix_norms = np.linalg.norm(matrix, axis=1)
+        query_norm = np.linalg.norm(query_vec)
+
+        # Avoid division by zero
+        matrix_norms = np.where(matrix_norms == 0, 1e-10, matrix_norms)
+        if query_norm == 0:
+            query_norm = 1e-10
+
+        similarities = dot_products / (matrix_norms * query_norm)
+
+        # Get top indices using argsort
+        top_indices = np.argsort(similarities)[::-1][:limit]
+
+        return [(summaries[i], timestamps[i], float(similarities[i])) for i in top_indices]
 
     def get_recent_episodes(self, limit=5):
         with sqlite3.connect(self.db_path) as conn:
