@@ -149,6 +149,25 @@ class MemoryManager:
             cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()
 
+    def get_full_context(self, entity='user', episode_limit=3):
+        """Retrieves facts, recent episodes, and rules in a single database connection."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+
+            # 1. Facts
+            cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
+            facts = cursor.fetchall()
+
+            # 2. Episodes
+            cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (episode_limit,))
+            episodes = cursor.fetchall()
+
+            # 3. Rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+            return facts, episodes, rules
+
     # --- Procedural Memory Methods ---
     def set_rule(self, name, content):
         with sqlite3.connect(self.db_path) as conn:
