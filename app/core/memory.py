@@ -132,16 +132,47 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Optimization: Full NumPy vectorization for bulk similarity calculation
+        # 1. Extract and stack all vectors into a single matrix
+        summaries, blobs, timestamps = zip(*results)
+        try:
+            # Efficiently convert list of blobs to a single NumPy matrix
+            all_vectors = np.frombuffer(b"".join(blobs), dtype=np.float32).reshape(len(blobs), -1)
 
-        # Sort by similarity
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        return scored_results[:limit]
+            # 2. Vectorized dot products
+            dot_products = np.dot(all_vectors, query_vec)
+
+            # 3. Vectorized norms for stored vectors
+            stored_norms = np.linalg.norm(all_vectors, axis=1)
+
+            # 4. Vectorized cosine similarity calculation with zero-norm protection
+            denominator = query_norm * stored_norms
+            similarities = np.divide(
+                dot_products,
+                denominator,
+                out=np.zeros_like(dot_products),
+                where=denominator != 0
+            )
+
+            # Combine back with metadata
+            scored_results = list(zip(summaries, timestamps, similarities))
+
+            # Sort by similarity descending
+            scored_results.sort(key=lambda x: x[2], reverse=True)
+            return scored_results[:limit]
+
+        except Exception as e:
+            print(f"[Memory] Vectorization fallback: {e}")
+            # Fallback to iterative if reshaping fails (e.g., inconsistent vector lengths)
+            scored_results = []
+            for summary, vector_blob, timestamp in results:
+                stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
+                denom = query_norm * np.linalg.norm(stored_vec)
+                sim = np.dot(query_vec, stored_vec) / denom if denom != 0 else 0.0
+                scored_results.append((summary, timestamp, sim))
+
+            scored_results.sort(key=lambda x: x[2], reverse=True)
+            return scored_results[:limit]
 
     def get_recent_episodes(self, limit=5):
         with sqlite3.connect(self.db_path) as conn:
