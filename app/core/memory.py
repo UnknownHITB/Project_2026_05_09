@@ -13,6 +13,7 @@ class MemoryManager:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -115,14 +116,12 @@ class MemoryManager:
         return "Episode recorded with semantic embedding."
 
     def semantic_search(self, query, limit=3):
-        """Finds episodes most similar to the query using cosine similarity."""
+        """Finds episodes most similar to the query using vectorized cosine similarity."""
         query_embedding = self._get_embedding(query)
         if not query_embedding:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
-        query_norm = np.linalg.norm(query_vec)
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -132,15 +131,35 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Optimization: Full NumPy vectorization for massive speedup on large datasets.
+        # 1. Extract metadata and concatenate all vectors into a single matrix.
+        summaries = [r[0] for r in results]
+        timestamps = [r[2] for r in results]
 
-        # Sort by similarity
+        # Consolidate all blobs into one byte string, then cast to float32 matrix
+        all_vectors_blob = b"".join(r[1] for r in results)
+        matrix = np.frombuffer(all_vectors_blob, dtype=np.float32).reshape(len(results), -1)
+
+        # 2. Vectorized Cosine Similarity: (A · B) / (||A|| * ||B||)
+        # Calculate dot products for all rows at once
+        dots = np.dot(matrix, query_vec)
+
+        # Calculate norms for all rows at once
+        matrix_norms = np.linalg.norm(matrix, axis=1)
+        query_norm = np.linalg.norm(query_vec)
+
+        # Handle zero norms to avoid division by zero
+        denominator = matrix_norms * query_norm
+        # If denominator is 0, similarity is 0
+        similarities = np.divide(dots, denominator, out=np.zeros_like(dots), where=denominator != 0)
+
+        # 3. Combine results and sort
+        scored_results = [
+            (summaries[i], timestamps[i], float(similarities[i]))
+            for i in range(len(results))
+        ]
         scored_results.sort(key=lambda x: x[2], reverse=True)
+
         return scored_results[:limit]
 
     def get_recent_episodes(self, limit=5):
