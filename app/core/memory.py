@@ -115,29 +115,53 @@ class MemoryManager:
         return "Episode recorded with semantic embedding."
 
     def semantic_search(self, query, limit=3):
-        """Finds episodes most similar to the query using cosine similarity."""
+        """Finds episodes most similar to the query using vectorized cosine similarity."""
         query_embedding = self._get_embedding(query)
         if not query_embedding:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
         
+        if query_norm == 0:
+            return self.get_recent_episodes(limit)
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL")
-            results = cursor.fetchall()
+            rows = cursor.fetchall()
 
-        if not results:
+        if not rows:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized Optimization:
+        # 1. Bulk load embeddings into a single NumPy matrix
+        # 2. Calculate all similarities at once using matrix-vector multiplication
+        summaries = [row[0] for row in rows]
+        timestamps = [row[2] for row in rows]
+
+        # Fast blob-to-matrix conversion
+        vectors = np.frombuffer(b''.join(row[1] for row in rows), dtype=np.float32).reshape(len(rows), -1)
+
+        # Calculate norms for all vectors at once
+        # Using keepdims=False to get a 1D array of norms
+        row_norms = np.linalg.norm(vectors, axis=1)
+
+        # Avoid division by zero for zero-norm vectors
+        # If a stored vector is all zeros, similarity with anything is 0
+        row_norms[row_norms == 0] = 1.0
+
+        # Matrix-vector multiplication for dot products
+        dot_products = np.dot(vectors, query_vec)
+
+        # Cosine similarity = dot(A, B) / (norm(A) * norm(B))
+        similarities = dot_products / (query_norm * row_norms)
+
+        # Combine results
+        scored_results = [
+            (summaries[i], timestamps[i], float(similarities[i]))
+            for i in range(len(rows))
+        ]
 
         # Sort by similarity
         scored_results.sort(key=lambda x: x[2], reverse=True)
