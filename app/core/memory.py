@@ -13,6 +13,7 @@ class MemoryManager:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -80,6 +81,29 @@ class MemoryManager:
             conn.commit()
         return f"Forgotten fact: {entity}'s {attribute}."
 
+    def get_full_context(self, user_entity='user', episode_limit=3):
+        """
+        Retrieves semantic, episodic, and procedural context in a single database connection.
+        Optimized to reduce connection overhead for multi-memory retrieval.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Semantic Facts
+            cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (user_entity,))
+            facts = cursor.fetchall()
+            # Episodic Summaries
+            cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (episode_limit,))
+            episodes = cursor.fetchall()
+            # Procedural Rules
+            cursor.execute("SELECT rule_content FROM procedural_memory")
+            rules = [row[0] for row in cursor.fetchall()]
+
+            return {
+                "facts": facts,
+                "episodes": episodes,
+                "rules": rules
+            }
+
     # --- Episodic Memory Methods ---
     def _get_embedding(self, text):
         """Generates an embedding for the given text using Ollama."""
@@ -115,15 +139,18 @@ class MemoryManager:
         return "Episode recorded with semantic embedding."
 
     def semantic_search(self, query, limit=3):
-        """Finds episodes most similar to the query using cosine similarity."""
+        """Finds episodes most similar to the query using vectorized cosine similarity."""
         query_embedding = self._get_embedding(query)
         if not query_embedding:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
         
+        # Avoid division by zero if query is empty or failed
+        if query_norm == 0:
+            return self.get_recent_episodes(limit)
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL")
@@ -132,15 +159,27 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Optimization: Full NumPy vectorization
+        # 1. Extract data from SQL results
+        summaries = [r[0] for r in results]
+        timestamps = [r[2] for r in results]
 
-        # Sort by similarity
+        # 2. Batch load all vectors into a single matrix
+        # Using b''.join is significantly faster than np.vstack in a loop for small blobs
+        all_vectors = np.frombuffer(b''.join(r[1] for r in results), dtype=np.float32).reshape(len(results), -1)
+
+        # 3. Calculate dot products and norms in parallel
+        dot_products = np.dot(all_vectors, query_vec)
+        stored_norms = np.linalg.norm(all_vectors, axis=1)
+
+        # 4. Compute cosine similarities (handle potential zeros)
+        # We use np.nan_to_num to treat cases where stored_norm is 0 as similarity 0
+        similarities = np.nan_to_num(dot_products / (query_norm * stored_norms))
+
+        # 5. Combine and sort
+        scored_results = list(zip(summaries, timestamps, similarities))
         scored_results.sort(key=lambda x: x[2], reverse=True)
+
         return scored_results[:limit]
 
     def get_recent_episodes(self, limit=5):
