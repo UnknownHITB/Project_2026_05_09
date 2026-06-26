@@ -118,11 +118,15 @@ class MemoryManager:
         """Finds episodes most similar to the query using cosine similarity."""
         query_embedding = self._get_embedding(query)
         if not query_embedding:
-            return self.get_recent_episodes(limit)
+            # Fallback: Return recent episodes with 0 similarity
+            recent = self.get_recent_episodes(limit)
+            return [(s, t, 0.0) for s, t in recent]
 
         query_vec = np.array(query_embedding, dtype=np.float32)
         # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
+        if query_norm == 0:
+            return []
         
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -132,12 +136,26 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # --- Optimization: Vectorized Cosine Similarity ---
+        # Efficiently load all vectors into a single NumPy array for batch processing
+        # b''.join() followed by np.frombuffer is faster than iterative np.frombuffer calls
+        summaries = [r[0] for r in results]
+        timestamps = [r[2] for r in results]
+
+        all_vectors_blob = b''.join(r[1] for r in results)
+        stored_vecs = np.frombuffer(all_vectors_blob, dtype=np.float32).reshape(len(results), -1)
+
+        # Calculate norms for all stored vectors at once
+        stored_norms = np.linalg.norm(stored_vecs, axis=1)
+
+        # Avoid division by zero for any malformed or zero-length vectors
+        stored_norms[stored_norms == 0] = 1e-10
+
+        # Compute dot products and similarities in vectorized operations
+        dot_products = np.dot(stored_vecs, query_vec)
+        similarities = dot_products / (query_norm * stored_norms)
+
+        scored_results = list(zip(summaries, timestamps, similarities.tolist()))
 
         # Sort by similarity
         scored_results.sort(key=lambda x: x[2], reverse=True)
