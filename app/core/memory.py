@@ -13,6 +13,8 @@ class MemoryManager:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -121,7 +123,6 @@ class MemoryManager:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
         
         with sqlite3.connect(self.db_path) as conn:
@@ -132,12 +133,31 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized similarity calculation
+        summaries = [r[0] for r in results]
+        timestamps = [r[2] for r in results]
+
+        # Efficiently load all vectors into a single matrix
+        # b''.join() is faster than np.array([np.frombuffer(r[1]) for r in results])
+        all_vectors_blob = b''.join(r[1] for r in results)
+        matrix = np.frombuffer(all_vectors_blob, dtype=np.float32).reshape(len(results), -1)
+
+        # Matrix-vector multiplication for dot products
+        dot_products = matrix @ query_vec
+
+        # Vectorized norm calculation
+        matrix_norms = np.linalg.norm(matrix, axis=1)
+
+        # Compute cosine similarities
+        denoms = query_norm * matrix_norms
+        # Handle zero-norm vectors to avoid division by zero
+        similarities = np.divide(dot_products, denoms, out=np.zeros_like(dot_products), where=denoms != 0)
+
+        # Combine results
+        scored_results = [
+            (summaries[i], timestamps[i], float(similarities[i]))
+            for i in range(len(results))
+        ]
 
         # Sort by similarity
         scored_results.sort(key=lambda x: x[2], reverse=True)
