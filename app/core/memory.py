@@ -13,6 +13,8 @@ class MemoryManager:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            # Optimization: Enable WAL mode for better concurrency
+            conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -120,26 +122,42 @@ class MemoryManager:
         if not query_embedding:
             return self.get_recent_episodes(limit)
 
-        query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
-        query_norm = np.linalg.norm(query_vec)
+        q_vec = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(q_vec)
         
+        if q_norm == 0:
+            return [(s, t, 0.0) for s, t in self.get_recent_episodes(limit)]
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            # Optimization: Fetch all vectors at once for batch processing
             cursor.execute("SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL")
             results = cursor.fetchall()
 
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Optimization: Use NumPy vectorization for matrix-vector similarity calculation
+        # This is significantly faster than iterating in Python for larger datasets.
+        summaries = [r[0] for r in results]
+        vectors_blob = b''.join(r[1] for r in results)
+        matrix = np.frombuffer(vectors_blob, dtype=np.float32).reshape(len(results), -1)
+        timestamps = [r[2] for r in results]
 
-        # Sort by similarity
+        # Matrix-vector multiplication for dot products
+        dot_products = matrix @ q_vec
+
+        # Vectorized norm calculation for each row
+        row_norms = np.linalg.norm(matrix, axis=1)
+
+        # Avoid division by zero and calculate cosine similarity
+        similarities = dot_products / (q_norm * row_norms + 1e-9)
+
+        scored_results = []
+        for i in range(len(summaries)):
+            scored_results.append((summaries[i], timestamps[i], float(similarities[i])))
+
+        # Sort by similarity descending
         scored_results.sort(key=lambda x: x[2], reverse=True)
         return scored_results[:limit]
 
