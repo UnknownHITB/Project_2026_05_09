@@ -13,6 +13,7 @@ class MemoryManager:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -118,10 +119,9 @@ class MemoryManager:
         """Finds episodes most similar to the query using cosine similarity."""
         query_embedding = self._get_embedding(query)
         if not query_embedding:
-            return self.get_recent_episodes(limit)
+            return [(s, t, 0.0) for s, t in self.get_recent_episodes(limit)]
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
         query_norm = np.linalg.norm(query_vec)
         
         with sqlite3.connect(self.db_path) as conn:
@@ -132,14 +132,31 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized similarity computation
+        # 1. Extract summaries and timestamps
+        summaries = [r[0] for r in results]
+        timestamps = [r[2] for r in results]
 
-        # Sort by similarity
+        # 2. Efficiently load all vectors into a matrix
+        # Joining blobs and using np.frombuffer is faster than np.vstack in a loop
+        all_vectors_blob = b"".join(r[1] for r in results)
+        stored_matrix = np.frombuffer(all_vectors_blob, dtype=np.float32).reshape(len(results), -1)
+
+        # 3. Compute cosine similarity in one go
+        # Dot products: matrix @ vector
+        dot_products = stored_matrix @ query_vec
+
+        # Norms of stored vectors
+        stored_norms = np.linalg.norm(stored_matrix, axis=1)
+
+        # Cosine similarities (handle zero norm if necessary)
+        # We use np.nan_to_num to turn NaNs (from 0/0) into 0.0
+        with np.errstate(divide='ignore', invalid='ignore'):
+            similarities = dot_products / (query_norm * stored_norms)
+        similarities = np.nan_to_num(similarities)
+
+        # 4. Zip, sort and return
+        scored_results = list(zip(summaries, timestamps, similarities))
         scored_results.sort(key=lambda x: x[2], reverse=True)
         return scored_results[:limit]
 
