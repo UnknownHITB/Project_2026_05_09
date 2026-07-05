@@ -1,3 +1,6 @@
 ## 2025-05-15 - [Semantic Search & Connection Pooling]
 **Learning:** Hoisting vector norm calculations out of loops in Python/NumPy provides a measurable speedup (e.g., ~33% for 10k items) because it reduces redundant scalar operations and function call overhead. Additionally, using `requests.Session()` for local LLM APIs (like Ollama) is critical to avoid TCP handshake latency in multi-turn chat and embedding generation.
 **Action:** Always check for redundant calculations in loops that involve NumPy or math operations. Ensure API clients use persistent sessions for repeated calls to the same host.
+## 2025-05-16 - [Vectorized Semantic Search & SQLite Concurrency]
+**Learning:** For semantic search, full NumPy vectorization (batch loading using b''.join() + matrix operations) provides a massive speedup (~5.36x for 10k items) compared to iterative Python loops. Additionally, enabling SQLite WAL mode and setting connection timeouts (timeout=60) is essential for maintaining performance and reliability in applications with concurrent read/write patterns.
+**Action:** Favor bulk data loading and matrix-vector operations over element-wise loops for any vector-based computations. Always enable WAL mode for SQLite databases used in multi-threaded or web contexts.
