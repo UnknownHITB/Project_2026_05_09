@@ -12,7 +12,8 @@ class MemoryManager:
         self.session = requests.Session()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             cursor = conn.cursor()
             # Semantic Memory: Facts & Knowledge
             cursor.execute("""
@@ -55,7 +56,7 @@ class MemoryManager:
 
     # --- Semantic Memory Methods ---
     def store_fact(self, entity, attribute, value):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO semantic_memory (entity, attribute, value)
@@ -65,7 +66,7 @@ class MemoryManager:
         return f"Stored fact: {entity}'s {attribute} is {value}"
 
     def get_facts(self, entity=None):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             if entity:
                 cursor.execute("SELECT attribute, value FROM semantic_memory WHERE entity = ?", (entity,))
@@ -74,7 +75,7 @@ class MemoryManager:
             return cursor.fetchall()
 
     def delete_fact(self, entity, attribute):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM semantic_memory WHERE entity = ? AND attribute = ?", (entity, attribute))
             conn.commit()
@@ -105,7 +106,7 @@ class MemoryManager:
         embedding = self._get_embedding(summary)
         vector_blob = np.array(embedding, dtype=np.float32).tobytes() if embedding else None
         
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO episodic_memory (summary, keywords, vector)
@@ -115,16 +116,14 @@ class MemoryManager:
         return "Episode recorded with semantic embedding."
 
     def semantic_search(self, query, limit=3):
-        """Finds episodes most similar to the query using cosine similarity."""
+        """Finds episodes most similar to the query using vectorized cosine similarity."""
         query_embedding = self._get_embedding(query)
         if not query_embedding:
             return self.get_recent_episodes(limit)
 
         query_vec = np.array(query_embedding, dtype=np.float32)
-        # Optimization: Pre-calculate query norm once instead of in the loop
-        query_norm = np.linalg.norm(query_vec)
         
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT summary, vector, timestamp FROM episodic_memory WHERE vector IS NOT NULL")
             results = cursor.fetchall()
@@ -132,26 +131,36 @@ class MemoryManager:
         if not results:
             return []
 
-        scored_results = []
-        for summary, vector_blob, timestamp in results:
-            stored_vec = np.frombuffer(vector_blob, dtype=np.float32)
-            # Cosine similarity (optimized by using pre-calculated query_norm)
-            similarity = np.dot(query_vec, stored_vec) / (query_norm * np.linalg.norm(stored_vec))
-            scored_results.append((summary, timestamp, similarity))
+        # Vectorized similarity calculation
+        summaries = [r[0] for r in results]
+        # Optimization: Use b''.join() and np.frombuffer() for bulk vector loading
+        vectors_blob = b''.join([r[1] for r in results])
+        stored_vectors = np.frombuffer(vectors_blob, dtype=np.float32).reshape(len(results), -1)
+        timestamps = [r[2] for r in results]
 
-        # Sort by similarity
-        scored_results.sort(key=lambda x: x[2], reverse=True)
-        return scored_results[:limit]
+        # Cosine similarity: (A . B) / (||A|| * ||B||)
+        dot_products = np.dot(stored_vectors, query_vec)
+        norms = np.linalg.norm(stored_vectors, axis=1)
+        query_norm = np.linalg.norm(query_vec)
+
+        # Prevent division by zero with nan_to_num
+        similarities = dot_products / (norms * query_norm)
+        similarities = np.nan_to_num(similarities)
+
+        # Get top indices sorted by similarity descending
+        top_indices = np.argsort(similarities)[::-1][:limit]
+
+        return [(summaries[i], timestamps[i], float(similarities[i])) for i in top_indices]
 
     def get_recent_episodes(self, limit=5):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT summary, timestamp FROM episodic_memory ORDER BY timestamp DESC LIMIT ?", (limit,))
             return cursor.fetchall()
 
     # --- Procedural Memory Methods ---
     def set_rule(self, name, content):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO procedural_memory (rule_name, rule_content)
@@ -161,13 +170,13 @@ class MemoryManager:
         return f"Rule '{name}' updated."
 
     def get_all_rules(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT rule_content FROM procedural_memory")
             return [row[0] for row in cursor.fetchall()]
 
     def delete_rule(self, name):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=60) as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM procedural_memory WHERE rule_name = ?", (name,))
             conn.commit()
