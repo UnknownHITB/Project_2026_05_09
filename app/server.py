@@ -48,10 +48,17 @@ app.add_middleware(
 )
 
 
-def _provider():
-    from app.providers.ollama_provider import OllamaProvider
+_provider_instance = None
 
-    return OllamaProvider()
+
+def _provider():
+    global _provider_instance
+
+    if _provider_instance is None:
+        from app.providers.ollama_provider import OllamaProvider
+
+        _provider_instance = OllamaProvider()
+    return _provider_instance
 
 
 def _session_store():
